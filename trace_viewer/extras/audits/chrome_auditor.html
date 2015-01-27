@@ -24,29 +24,118 @@ tv.exportTo('tv.e.audits', function() {
    */
   function ChromeAuditor(model) {
     this.model = model;
+    if (tv.e.audits.ChromeAudit.supportsModel(this.model)) {
+      var audit = new tv.e.audits.ChromeAudit(this.model);
+
+      // Must be a browser in order to do audits.
+      if (audit.browser === undefined)
+        this.audit = undefined;
+      else
+        this.audit = audit;
+    } else {
+      this.audit = undefined;
+    }
   };
 
   ChromeAuditor.prototype = {
     __proto__: Auditor.prototype,
 
     runAudit: function() {
-      if (!tv.e.audits.ChromeAudit.supportsModel(this.model))
+      if (!this.audit)
         return;
-      var addIR = function(name, start, end) {
-        start = (start / 300) * this.model.bounds.range;
-        end = (end / 300) * this.model.bounds.range;
-        start += this.model.bounds.min;
-        end += this.model.bounds.min;
 
-        this.model.addInteractionRecord(new tv.c.trace_model.InteractionRecord(
-            name, tv.b.ui.getColorIdForReservedName(name),
-            start, end - start));
+      var allLoadEvents = this.getAllLoadEvents();
+      var allFrameEvents = this.getAllFrameEvents();
+      var allLatencyEvents = this.getAllLatencyEvents();
+      var allFrameAndLatencyEvents = [];
+      allFrameAndLatencyEvents.push.apply(allFrameAndLatencyEvents,
+                                          allFrameEvents);
+      allFrameAndLatencyEvents.push.apply(allFrameAndLatencyEvents,
+                                          allLatencyEvents);
+
+      function mergeEventsIntoIR(title, colorId, events) {
+        var e0 = events[0];
+        var eN = events[events.length - 1];
+        var ir = new tv.c.trace_model.InteractionRecord(
+            title, colorId,
+            e0.start, eN.end - e0.start);
+        ir.events = events;
+        return ir;
+      }
+
+      var addIRs = function(records) {
+        records.forEach(function(ir) {
+          this.model.addInteractionRecord(ir);
+        }, this);
       }.bind(this);
+
+      var mergedLoadIRs = tv.e.audits.mergeEvents(
+          allLoadEvents, 300,
+          mergeEventsIntoIR.bind(
+              undefined, 'Loading',
+              tv.b.ui.getColorIdForReservedName('mt_initial_load')));
+
+      var mergedFrameIRs = tv.e.audits.mergeEvents(
+          allFrameEvents, 150,
+          mergeEventsIntoIR.bind(
+              undefined, 'Rendering',
+              tv.b.ui.getColorIdForReservedName('mt_generic_smooth_effect')));
+
+      var mergedLatencyIRs = tv.e.audits.mergeEvents(
+          allLatencyEvents, 150,
+          mergeEventsIntoIR.bind(
+              undefined, 'Input',
+              tv.b.ui.getColorIdForReservedName('mt_input_bound_effect')));
+
+      var mergedFrameAndLatencyIRs = tv.e.audits.mergeEvents(
+          allFrameAndLatencyEvents, 150,
+          mergeEventsIntoIR.bind(
+              undefined, 'RenderingOrInput',
+              tv.b.ui.getColorIdForReservedName('mt_quiescence')));
+
+      addIRs(mergedLoadIRs);
+      addIRs(mergedFrameIRs);
+      addIRs(mergedLatencyIRs);
+      addIRs(mergedFrameAndLatencyIRs);
+
+      /*
       addIR('mt_initial_load', 0, 100);
       addIR('mt_user_initiated_ui_state_change', 100, 116);
       addIR('mt_input_bound_effect', 116, 216);
       addIR('mt_generic_smooth_effect', 216, 247);
       addIR('mt_quiescence', 247, 300);
+      */
+    },
+
+    getAllLoadEvents: function() {
+      var model = this.model;
+      if (this.audit.browser === undefined)
+        return;
+      return this.audit.browser.getLoadingEventsInRange(model.bounds);
+    },
+
+    getAllFrameEvents: function() {
+      var model = this.model;
+      var frameEvents = [];
+      if (this.audit.browser) {
+        var fe = this.audit.browser.getFrameEventsInRange(
+            tv.e.audits.IMPL_FRAMETIME_TYPE,
+            model.bounds);
+        frameEvents.push.apply(frameEvents, fe);
+      }
+      tv.b.iterItems(this.audit.renderers, function(pid, renderer) {
+        var fe = renderer.getFrameEventsInRange(tv.e.audits.IMPL_FRAMETIME_TYPE,
+                                       model.bounds);
+        frameEvents.push.apply(frameEvents, fe);
+      }, this);
+      frameEvents.sort(function(x, y) { return x.start - y.start; });
+      return frameEvents;
+    },
+
+    getAllLatencyEvents: function() {
+      if (!this.audit.browser)
+        return [];
+      return this.audit.browser.getLatencyEventsInRange(this.model.bounds);
     }
   };
 

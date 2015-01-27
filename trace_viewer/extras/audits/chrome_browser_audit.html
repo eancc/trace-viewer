@@ -25,6 +25,19 @@ tv.exportTo('tv.e.audits', function() {
   ChromeBrowserAudit.prototype = {
     __proto__: tv.e.audits.ChromeProcessAudit.prototype,
 
+    getLoadingEventsInRange: function(rangeOfInterest) {
+      var loadingEvents = [];
+      tv.b.iterItems(this.process.threads, function(tid, thread) {
+        thread.iterateAllEvents(function(event) {
+          if (event.title.indexOf('WebContentsImpl Loading') !== 0)
+            return;
+          if (rangeOfInterest.intersectsExplicitRange(event.start, event.end))
+            loadingEvents.push(event);
+        });
+      });
+      return loadingEvents;
+    },
+
     get hasLatencyEvents() {
       var hasLatency = false;
       this.audit.model.getAllThreads().forEach(function(thread) {
